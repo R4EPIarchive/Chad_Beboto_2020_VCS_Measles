@@ -1,0 +1,1372 @@
+---
+title: "Beboto vaccination coverage survey"
+output: 
+  word_document:
+    keep_md: true
+---
+
+## Installing and loading required packages 
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// setup \\\
+-------------------------------------------------------------------------------->
+
+```{r setup, include = FALSE, results='hide', message=FALSE, warning=FALSE}
+
+## hide all code chunks in the output, but show errors, define figure width/height
+knitr::opts_chunk$set(echo = FALSE, error = TRUE)
+
+
+## Installing required packages for this template
+required_packages <- c("knitr",       # create output docs
+                       "here",        # find your files
+                       "rio",         # for importing data
+                       "epitrix",     # clean/shape data
+                       "dplyr",       # clean/shape data
+                       "tidyr",       # clean/shape data
+                       "forcats",     # manipulate and rearrange factors
+                       "stringr",     # manipulate texts
+                       "ggplot2",     # create plots and charts
+                       "sitrep",      # MSF field epi functions
+                       "survey",      # for survey functions
+                       "srvyr",       # dplyr wrapper for survey package
+                       "flextable",   # for prettier tables
+                       "viridis",     # for pretty colour palettes
+                       "matchmaker")  # for easier excel cleaning   
+                       
+
+for (pkg in required_packages) {
+  ## install packages if not already present
+  if (!pkg %in% rownames(installed.packages())) {
+    install.packages(pkg)
+  }
+  
+  ## load packages to this current session 
+  library(pkg, character.only = TRUE)
+}
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_data \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r read_data  merge data, warning = FALSE, message = FALSE}
+
+## Excel file ------------------------------------------------------------------
+
+## read in household data sheet
+study_data_hh <- rio::import(here::here("data", "vaccination_coverage_cleaned.xlsx"), 
+                             which = "hh level", na = ".")
+
+## read in individual level data sheet
+study_data_indiv <- rio::import(here::here("data", "vaccination_coverage_cleaned.xlsx"), 
+                                which = "ind level", na = ".")
+
+## join the individual and household data to form a complete data set
+study_data_raw <- left_join(study_data_hh, study_data_indiv, by = "merge_id")
+
+## make a copy of your orginal dataset and name it study_data_cleaned
+study_data_cleaned <- study_data_raw
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_population_data \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r population_data, warning = FALSE, message = FALSE}
+
+## Enter counts directly -------------------------------------------------------
+
+#Enter population counts by groups. 
+
+population_6m9y <- gen_population(
+  groups = c("6 months-9 years"), 
+  counts = c(24711), 
+  strata = NULL) %>%
+  rename (age_group = groups, 
+          population = n)
+
+```
+
+
+```{r create_age_group}
+
+## make sure age is an integer 
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(age_years = as.integer(age_years), 
+         age_months = as.integer(age_months))
+
+## create an age group variable, even though everyone in the dataset is all in one age group. 
+study_data_cleaned <- study_data_cleaned %>%
+mutate(age_group = factor(
+    if(age_years >= 1) {
+      "6m-9y"
+    } else {
+      "6m-9y"
+    }
+  ))
+
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// browse_data \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r browse_data, eval = FALSE, include = FALSE}
+
+##Julia note: this is weird, it's returning ages that are fine (e.g. age of routine vaccination is 9 months and current age is 11 months. That's normal...)
+
+## check for logical date inconsistencies 
+## for example check vaccination age greater than current age and return corresponding IDs
+
+
+study_data_cleaned$age_routine_vacc <- as.numeric(study_data_cleaned$age_routine_vacc)
+study_data_cleaned$age_months <- as.numeric(study_data_cleaned$age_months)
+
+study_data_raw %>% 
+  filter(age_routine_vacc > age_months) %>%
+  select("merge_id", "age_routine_vacc", "age_months")
+
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// standardise_dates \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+
+```{r standardise_dates, include = FALSE}
+
+## use the guess_dates() function to make a first pass at date variables.
+study_data_cleaned <- study_data_cleaned %>%
+   mutate_at(vars(matches("date|Date")), linelist::guess_dates,
+             error_tolerance = 0.5)
+
+#checked class of "today" date variable - it's character. 
+class(study_data_cleaned$today)
+
+#change "today" date variable to a date:
+study_data_cleaned$today<- as.Date(study_data_cleaned$today, format = "%Y-%m-%d")
+
+#drop data from training and pilot day. 
+table(study_data_cleaned$today) # check which dates need to be dropped
+#drop dates older than April 1, 2020
+study_data_cleaned <- subset(study_data_cleaned, today >= "2020-04-01")
+
+```
+
+##RETURN to this later and do all the cleaning in R 
+
+
+```{r cleaning, include = FALSE}
+
+#checked in excel to find weirdness for variables, like we did each day during survey. Corrected hh number, cluster number, and team number for some. 
+
+#checking for weirdness here & corrected in excel if necessary
+#any houshold marked as both first AND second visit on the same line. 
+#table(study_data_cleaned$first_visit, study_data_cleaned$second_visit)
+
+#any empty hh that gave consent
+#table(study_data_cleaned$empty_household, study_data_cleaned$consent)
+
+#remove space from ndaba3:
+study_data_cleaned$village_name <- gsub(pattern = "ndaba 3",replacement = "ndaba3", study_data_cleaned$village_name)
+
+
+#changed character variables that I'll be using to numeric: 
+study_data_cleaned$children_count <- as.numeric(study_data_cleaned$children_count)
+study_data_cleaned$cluster_number <- as.numeric(study_data_cleaned$cluster_number)
+study_data_cleaned$household_number <- as.numeric(study_data_cleaned$household_number)
+study_data_cleaned$age_caretaker <- as.numeric(study_data_cleaned$age_caretaker)
+
+```
+
+```{r recoding "other" reasons for non-vaccination}
+
+# creating dataframes with all other reasons. Create and export to make matchmaker data dictionary thingie. 
+msf_other <- study_data_cleaned %>%
+  filter(!is.na(reason_msf_other)) %>%
+  group_by(reason_msf_other) %>%
+  summarise(n = n())
+
+sia_other <- study_data_cleaned %>%
+  filter(!is.na(reason_sia_other)) %>%
+  group_by(reason_sia_other) %>%
+  summarise(n = n())
+
+routine_other <- study_data_cleaned %>%
+  filter(!is.na(reason_route_other)) %>%
+  group_by(reason_route_other) %>%
+  summarise(n = n())
+
+# exporting these to combine and work on for matchmaker
+rio::export(msf_other, str_glue("msf_other_reasons_{Sys.Date()}.xlsx"))
+rio::export(sia_other, str_glue("sia_other_reasons_{Sys.Date()}.xlsx"))
+rio::export(routine_other, str_glue("routine_other_reasons_{Sys.Date()}.xlsx"))
+
+# importing data dictionary I created to recode "other" values for all three variables.
+dict_other_reasons <- rio::import(here::here("data", "dict_other_reasons.xlsx"))
+
+# using matchmaker package and data dictionary I created to recode "other" values for all three variables.
+study_data_cleaned <- match_df(study_data_cleaned,
+  dictionary = dict_other_reasons,
+  from = "options",
+  to = "values",
+  by = "grp")
+
+
+```
+
+
+```{r describing households - with paper forms}
+
+#read in the daily household journal summary sheet
+hh_summary <- rio::import(here::here("data", "journal_menage.xlsx"))
+
+# number hh visited in total
+total_hh <- sum(hh_summary$n_hh_visited)
+
+# number hh requiring second visit
+sum(hh_summary$`n_hh_requiring two visits`)
+# % hh requiring second visit
+(sum(hh_summary$`n_hh_requiring two visits`))/(sum(hh_summary$n_hh_visited))*100
+
+#number hh empty first visit
+sum(hh_summary$n_hh_empty_1st_visit)
+#% hh empty first visit
+(sum(hh_summary$n_hh_empty_1st_visit))/(sum(hh_summary$n_hh_visited)) *100
+
+# number hh no person to consent first visit
+sum(hh_summary$n_hh_no_adult_1st_visit)-17 #removed the 17 households that were empty, as they were included in having no one to consent. I just want to see houshold that weren't empty, but still had no one able to provide consent. 
+# % hh no person to consent first visit
+(sum(hh_summary$n_hh_no_adult_1st_visit)-17)/(sum(hh_summary$n_hh_visited))*100
+
+# number hh empty second visit
+sum(hh_summary$n_hh_empty_2nd_visit)
+# percent hh empty second visit
+(sum(hh_summary$n_hh_empty_2nd_visit))/(sum(hh_summary$`n_hh_requiring two visits`))*100
+
+#number hh no person to consent second visit
+sum(hh_summary$n_hh_no_adult_2nd_visit)-8 #removed the 8 households that were empty on the seond visit, as they were included in having no one to consent. I just want to see houshold that weren't empty, but still had no one able to provide consent. 
+(sum(hh_summary$n_hh_no_adult_2nd_visit)-8)/(sum(hh_summary$`n_hh_requiring two visits`))*100
+
+#number and percent with no children of eligible age. (not including NAs because that indicates the interview didn't get that far - the hh was empty or no one to consent)
+study_data_cleaned  %>%
+  group_by(children_count == 0) %>%
+  summarise(n= n()) %>%
+  mutate(percent = (n /448)*100) %>%
+  mutate(percent = round(percent, 2))
+
+# number of households interviewed (source: paper copies of daily hh journal (=329). 
+#HOWEVER, this does match with Kobo data, so we go with kobo data since that is the number of interviews completed for certain) Code for paper data was: sum(hh_summary$n_hh_interviewed)
+
+# number of hh interivewed from kobo data (= 331)
+hh_interviewed <- study_data_cleaned %>%
+  filter(children_count != 0) %>%
+  group_by(village_name, household_number) %>%
+  summarise(count = n()) %>%
+  nrow()
+
+# number of hh interviewed on 1st visit (= # hh visited - hh empty/no adult)
+first_visit_interview <- (hh_interviewed-21)
+# number of hh interviewed on 2nd visit (= # hh interviewed - hh empty/no adult)
+hh_interviewed-first_visit_interview #number calculated in step above
+
+
+# 48 hh empty on first visit, 27 still empty on second visit
+48-27 # = 21: number of households definitely not interviewed on either first or second visit, since empty or no consent on both occassions. 
+
+
+
+#overall response rate: 
+(hh_interviewed/total_hh)*100
+
+
+
+```
+
+```{r describing households - using Kobo data only}
+
+#this data is unreliable and has much lower counts than was traced on the paper form. I don't think surveyors were truly recording all 1st visits to a hh in kobo. 
+table(study_data_cleaned$first_visit)
+
+table(study_data_cleaned$second_visit)
+
+table(study_data_cleaned$empty_household)
+
+```
+
+
+
+```{r household characteristic table}
+#create data frame with values above and pass to flextable for prettier report.  
+#IN PRORGESS. Fake numbers and needs work. 
+
+data.frame(Characteristic = c("Total households interviewed", 
+                              "Households interviewed - 1st visit",
+                              "Households interviewed - 2nd vist",
+                              "Households requiring second visit", 
+                              "Households empty (after 2nd visit)", 
+                              "Households without adult (after 2nd visit)", 
+                              "Households without eligible children",
+                              "Households that did not consent", 
+                              "Total households visited",), 
+                              count = c(321, 
+                                        283,
+                                        
+                                        48,
+                                        8, 
+                                        19, 
+                                        75, 
+                                        1, 
+                                        448), 
+                              percent = c(100.0,
+                                          73.9,
+                                          10.7,
+                                          16.7,
+                                          40.0, 
+                                          16.7, 
+                                          0.2)) %>%
+  rename("Count (n)" = count, 
+         "Percent (%)" = percent) %>%
+  flextable() %>%
+  autofit
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// remove_unused_data \\\
+--------------------------------------------------------------------------------
+It is important that you drop observations before adding survey weights!
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r remove_unused_data}
+
+## store the cases that you drop so you can describe them (e.g. non-consenting)
+dropped <- study_data_cleaned %>% 
+  filter(consent =="no")
+
+#drop the clusters used to replace the ferrick that was not accessible. Do not have population counts for those villages. 
+dropped2 <- study_data_cleaned %>%
+  filter(village_name == "other")
+
+## drop the unused rows from the survey data set  
+study_data_cleaned <- study_data_cleaned %>%
+  filter(village_name != "other") %>%
+  filter(consent == "yes")
+
+```
+
+
+
+```{r filtering for no children}
+
+study_data_cleaned <- study_data_cleaned %>%
+  filter(!is.na(child_number)) #filtering for no children, indicating no child of eligible age or no one home, etc.) 
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// factor_vars \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+
+##Relabelling, reordering 
+
+```{r vaccination status msf/routine/sia}
+
+## MSF vaccination - combine yes answers into one - yes card and yes verbal
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(msf_vacc_status = case_when(
+    is.na(msf_vacc) ~ NA_character_,
+    msf_vacc == "card" ~ "Yes", 
+    msf_vacc == "verbal" ~ "Yes", 
+    msf_vacc == "no" ~ "No", 
+    msf_vacc == "dont_know" ~ "Don't know", 
+    msf_vacc == "no_answer" ~ "No answer"))
+
+#checking the variable we created above. 
+table(study_data_cleaned$msf_vacc) #old variable
+table(study_data_cleaned$msf_vacc_status) #new variable
+
+
+## ROUTINE vaccination - combine yes answers into one - yes card and yes verbal
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(routine_vacc_status = case_when(
+    is.na(routine_vacc) ~ NA_character_,
+    routine_vacc == "card" ~ "Yes", 
+    routine_vacc == "verbal" ~ "Yes", 
+    routine_vacc == "no" ~ "No", 
+    routine_vacc == "dont_know" ~ "Don't know", 
+    routine_vacc == "no_answer" ~ "No answer"))
+
+#checking the variable we created above.
+table(study_data_cleaned$routine_vacc) # old variable
+table(study_data_cleaned$routine_vacc_status) # new variable
+
+
+## SIA vaccination - combine yes answers into one - yes card and yes verbal
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(sia_vacc_status = case_when(
+    is.na(sia_vacc) ~ NA_character_,
+    sia_vacc == "card" ~ "Yes", 
+    sia_vacc == "verbal" ~ "Yes", 
+    sia_vacc == "no" ~ "No", 
+    sia_vacc == "dont_know" ~ "Don't know", 
+    sia_vacc == "no_answer" ~ "No answer"))
+
+#checking the variable we created above.
+table(study_data_cleaned$sia_vacc) # old variable
+table(study_data_cleaned$sia_vacc_status) # new variable
+
+
+```
+
+
+
+
+```{r overall vaccination status}
+
+#creating variable for all vaccinations combined for overall coverage
+study_data_cleaned <- study_data_cleaned %>%
+  mutate(overall_vacc_status = case_when (
+    sia_vacc_status == "Yes" ~ "Vaccinated",
+    msf_vacc_status == "Yes" ~ "Vaccinated",
+    routine_vacc_status == "Yes" ~ "Vaccinated", 
+    TRUE ~ "Not Vaccinated"))
+
+#checking new variable
+table(study_data_cleaned$overall_vacc_status)
+  
+```
+
+```{r immunity status}
+
+#creating variable for immunity based on if they were previously ill or vaccinated. 
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(immunity = case_when(
+    diagnosis_disease == "yes" ~ "Immune", 
+    overall_vacc_status == "Yes" ~ "Immune", 
+    TRUE ~ "Susceptible")) 
+
+```
+
+
+
+```{r reasons for non-vaccination - MSF}
+
+# Relabel reasons
+
+# check which reasons are used for MSF
+table(study_data_cleaned$reason_msf_vacc)
+
+#rename reasons for MSF
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(msf_reason_renamed = case_when(
+    is.na(msf_vacc) ~ NA_character_,
+    reason_msf_vacc == "family_away" ~ "Family was away during time of vaccination", 
+    reason_msf_vacc == "other" ~ "Other", 
+    reason_msf_vacc == "unaware_eligible" ~ "Didn't know child was eligible for vaccination"))
+
+#check old and new variables together
+table(study_data_cleaned$reason_msf_vacc)
+table(study_data_cleaned$msf_reason_renamed)
+
+
+# creating a variable with ALL msf reasons together - including "other."
+
+study_data_cleaned <- study_data_cleaned %>%
+  mutate(msf_all_reasons = case_when (
+    reason_msf_vacc == "other" ~ reason_msf_other, # when the kobo data indicates "other" in the reason column, then fill this new variable with data from the kobo "reason_msf_other" column
+                          TRUE ~ msf_reason_renamed)) # for all other instances, fill in the new column with data from the kobo reason_msf_vacc column (or more specifically the one I created with better names for graphing. 
+ 
+
+```
+
+
+
+``` {r reasons for non-vaccination - routine}
+# Relabel reasons
+
+#check which reasons are used for routine
+table(study_data_cleaned$reason_route_vacc)
+
+## rename routine reasons 
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(route_reason_renamed = case_when(
+    is.na(reason_route_vacc) ~ NA_character_,
+    reason_route_vacc == "child_old" ~ "Child was too old", 
+    reason_route_vacc == "child_young" ~ "Child was too young", 
+    reason_route_vacc == "other" ~ "Other", 
+    reason_route_vacc == "no_answer" ~ "No answer", 
+    reason_route_vacc == "not_beneficial" ~ "Not beneficial", 
+    reason_route_vacc == "painful" ~ "Painful"))
+
+
+#check old and new variable
+table(study_data_cleaned$reason_route_vacc)
+table(study_data_cleaned$route_reason_renamed)
+
+
+#routine other reasons: # need to find a way to group some of these with similar spellings/ reasons
+routine_reason_other <- study_data_cleaned %>%
+  filter(!is.na(reason_route_other)) %>%
+  group_by(reason_route_other) %>%
+  summarise(reason = n())
+
+
+# creating a variable with ALL routine reasons together - including "other."
+study_data_cleaned <- study_data_cleaned %>%
+  mutate(route_all_reasons = case_when (
+    reason_route_vacc == "other" ~ reason_route_other, # when the kobo data indicates "other" in the reason column, then fill this new variable with data from the kobo "reason_msf_other" column
+                          TRUE ~ route_reason_renamed))# for all other instances, fill in the new column with data from the kobo reason_msf_vacc column (or more specifically the one I created with better names for graphing. 
+
+
+```
+
+```{r reasons for non-vaccination - SIA}
+# Relabel reasons
+
+#check which reasons are used for SIA
+table(study_data_cleaned$reason_sia_vacc)
+
+## rename SIA reasons 
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(sia_reason_renamed = case_when(
+    is.na(reason_sia_vacc) ~ NA_character_,
+    reason_sia_vacc == "distance" ~ "Vaccination site was too far away", 
+    reason_sia_vacc == "family_away" ~ "Family was away during time of vaccination", 
+    reason_sia_vacc == "no_answer" ~ "No answer", 
+    reason_sia_vacc == "other" ~ "Other", 
+    reason_sia_vacc == "unaware_campaign" ~ "Unaware there was a vaccination campaign",
+    reason_sia_vacc == "unaware_eligible" ~ "Didn't know child was eligible for vaccination"))
+
+#check old and new variable
+table(study_data_cleaned$reason_sia_vacc)
+table(study_data_cleaned$sia_reason_renamed)
+  
+#SIA other reasons: # need to find a way to group some of these with similar spellings/ reasons
+sia_reason_other <- study_data_cleaned %>%
+  filter(!is.na(reason_sia_other)) %>%
+  group_by(reason_sia_other) %>%
+  summarise(reason = n())
+
+
+
+# creating a variable  with ALL SIA reasons together - including "other."
+study_data_cleaned <- study_data_cleaned %>%
+  mutate(route_all_reasons = case_when (
+    reason_route_vacc == "other" ~ reason_route_other, # when the kobo data indicates "other" in the reason column, then fill this new variable with data from the kobo "reason_msf_other" column
+                          TRUE ~ route_reason_renamed))# for all other instances, fill in the new column with data from the kobo reason_msf_vacc column (or more specifically the one I created with better names for graphing. 
+
+```
+
+```{r reordering factors}
+
+## correct the order of levels in newly created variables:
+
+#MSF vaccination
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(msf_vacc_status = fct_relevel(msf_vacc_status, 
+                                       "Yes", 
+                                       "No", 
+                                       "Don't know",
+                                       "No answer"))
+
+#ROUTINE vaccination
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(routine_vacc_status = fct_relevel(routine_vacc_status, 
+                                       "Yes", 
+                                       "No", 
+                                       "Don't know", 
+                                       "No answer"))
+
+#SIA vaccination
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(sia_vacc_status = fct_relevel(sia_vacc_status, 
+                                       "Yes", 
+                                       "No", 
+                                       "Don't know", 
+                                       "No answer"))
+
+#overall vaccination
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(overall_vacc_status = fct_relevel(overall_vacc_status, 
+                                       "Yes", 
+                                       "No"))
+
+#previous measles diagnosis: 
+
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(diagnosis_disease = fct_relevel(diagnosis_disease, 
+                                       "yes", 
+                                       "no", 
+                                       "dont_know"))
+
+#immunity
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(immunity = fct_relevel(immunity, 
+                                       "Immune", 
+                                       "Susceptible"))
+
+
+
+```
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// cluster_counts \\\
+--------------------------------------------------------------------------------
+You will need to have one column with a cluster identifier which 
+matches your survey data, and another column with the number of households in 
+each cluster. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+##Survey weights
+```{r cluster_counts}
+
+#read data in
+cluster_counts <- rio::import(here::here("data", "cluster counts.xlsx"))
+
+#round digits
+cluster_counts$total_hh<- round(cluster_counts$total_hh, digits = 0)
+
+#lowercase
+cluster_counts$village_name <- tolower(cluster_counts$village_name) 
+
+#drop population column
+cluster_counts <- cluster_counts %>%
+    select(-pop)
+
+#might need to be a tibble for code later? the template had this created as a tibble but I imported instead. 
+as_tibble(cluster_counts)
+
+
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// survey_weights \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r survey_weights}
+
+## merge village and household to create a unique household ID 
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(hh_id = str_glue("{village_name}_{household_number}"))
+
+## create cluster weights 
+#https://rdrr.io/github/R4EPI/sitrep/man/add_weights_cluster.html
+
+study_data_cleaned <- add_weights_cluster(x = study_data_cleaned, 
+                                          cl = cluster_counts, 
+                                          eligible = children_count, 
+                                          interviewed = children_count, 
+                                          cluster_x = village_name, 
+                                          cluster_cl = village_name, 
+                                          household_x = household_number, 
+                                          household_cl = total_hh, 
+                                          surv_weight = "surv_weight_cluster", 
+                                          surv_weight_ID = "surv_weight_ID_cluster", 
+                                          ignore_cluster = FALSE, 
+                                          ignore_household = FALSE)
+
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// survey_design \\\
+--------------------------------------------------------------------------------
+
+Create survey object according to your study design. Used the same way as dataframes to calculate weight proportions etc. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r create_survey_design}
+
+survey_design <- study_data_cleaned %>% 
+  as_survey_design(ids = village_name, # 1 for no cluster ids 
+                   weights = surv_weight_cluster, # weight variable created above 
+                   strata = NULL # sampling was simple (no strata)
+                  )
+
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// save_cleaned_data \\\
+--------------------------------------------------------------------------------
+
+You can save your cleaned dataset as an Excel. 
+This automatically names your file "study_data_cleaned_DATE", where DATE is the
+current date.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r save_cleaned_data}
+rio::export(study_data_cleaned, str_glue("study_data_cleaned_{Sys.Date()}.xlsx"))
+```
+
+
+
+# Results
+
+## Survey inclusion 
+
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// inclusion_counts \\\
+--------------------------------------------------------------------------------
+
+The below chunks calculate values that are displayed with the inline text
+
+Get the counts of clusters and households included 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r inclusion_counts}
+
+## get counts of number of clusters 
+num_clus <- study_data_cleaned %>%
+  ## trim data to unique clusters
+  distinct(cluster_number) %>% 
+  ## get number of rows (count how many unique)
+  nrow()
+
+## get counts of number households 
+num_hh <- study_data_cleaned %>% 
+  ## get unique houses by cluster
+  distinct(cluster_number, household_number) %>% 
+  ## get number of rounds (count how many unique)
+  nrow()
+
+```
+
+
+We included `r num_hh` households accross `r num_clus` clusters in this survey analysis. 
+
+
+Among the `r nrow(dropped)` individuals without consent to participate in the survey, 
+the reasons for refusal are ___________. 
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// cluster_hh_size \\\
+--------------------------------------------------------------------------------
+
+The below chunks calculate values that are displayed with the inline text
+
+Get counts of households per cluster and individuals per household. 
+From these create medians and standard deviations. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r cluster_hh_size}
+
+## get counts of the number of households per cluster
+clustersize <- study_data_cleaned %>% 
+  ## trim data to only unique households within each cluster
+  distinct(cluster_number, household_number) %>%
+  ## count the number of households within each cluster
+  count(cluster_number) %>% 
+  pull(n)
+
+## get the median number of households per cluster
+clustermed <- median(clustersize)
+
+## get the min and max number of households per cluster
+## paste these together seperated by a dash 
+clusterrange <- str_c(range(clustersize), collapse = "--")
+
+## get counts of children per household 
+## do this by cluster as household IDs are only unique within clusters
+hhsize <- study_data_cleaned %>% 
+  count(cluster_number, household_number) %>%
+  pull(n) 
+
+## get median number of children per household
+hhmed <- median(hhsize)
+## get the min and max number of children per household
+## paste these together seperated by a dash 
+hhrange <- str_c(range(hhsize), collapse = "--")
+
+# get standard deviation 
+hhsd <- round(sd(hhsize), digits = 1)
+```
+
+
+The median number of households per cluster was
+`r clustermed`, with a range of `r clusterrange`. The median number of children
+per household was `r hhmed` (range: `r hhrange`, standard deviation: `r hhsd`). 
+
+
+## Demographic information
+
+
+In total we included `r nrow(study_data_cleaned)` children in the survey analysis. 
+The age breakdown and a comparison with the source population is shown below. 
+
+
+```{r median_age_sex_ratios}
+## compute the median age; first need to convert ages to one tyoe of format (chose to make all ages in years)
+study_data_cleaned <- study_data_cleaned %>%
+  mutate(age_new = case_when(
+    age_months == 6 ~ 0.5,
+    age_months == 7 ~ 0.58, 
+    age_months == 8 ~ 0.67, 
+    age_months == 9 ~ 0.75, 
+    age_months == 10 ~ 0.83,
+    age_months == 11 ~ 0.92, 
+    age_years == 1 ~ 1, 
+    age_years == 2 ~ 2, 
+    age_years == 3 ~ 3, 
+    age_years == 4 ~ 4, 
+    age_years == 5 ~ 5, 
+    age_years == 6 ~ 6,
+    age_years == 7 ~ 7,
+    age_years == 8 ~ 8,
+    age_years == 9 ~ 9))
+
+medage <- median(study_data_cleaned$age_new)
+
+
+## paste the lower and uper quartile together
+iqr <- str_c(  # basically copy paste together the following
+  ## calculate the 25% and 75% of distribution, with missings removed
+  quantile(     
+    study_data_cleaned$age_new, 
+    c(0.25, 0.75), 
+    na.rm = TRUE), 
+  ## between lower and upper place an en-dash
+  collapse = "--")
+
+
+## compute overall sex ratio 
+sex_ratio <- study_data_cleaned %>% 
+  count(sex) %>%
+  pivot_wider(names_from = sex, values_from = n) %>% 
+  mutate(ratio = round(male/female, digits = 3)) %>%
+  pull(ratio)
+
+
+```
+
+Among the `r nrow(study_data_cleaned)` surveyed individuals, there were 
+`r fmt_count(study_data_cleaned, sex == "female")` females and 
+`r fmt_count(study_data_cleaned, sex == "male")` males (unweighted). The male to
+female ratio was `r sex_ratio` in the surveyed population.
+The median age of surveyed individuals was `r medage` years (Q1-Q3 of `r iqr`
+years). Children under five years of age made up 
+`r fmt_count(study_data_cleaned, age_new < 5)`of the surveyed individuals.
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// describe_by_age_group_and_sex \\\
+--------------------------------------------------------------------------------
+
+This chunk will create an unweighted table of survey individuals by age group 
+and sex.
+
+Note that proportions are of the total sample (not within each gender) 
+to change this, set proptotal = FALSE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r describe_by_sex}
+
+tab_linelist(study_data_cleaned, age_group, 
+             strata     = sex, 
+             row_total  = TRUE,
+             prop_total = TRUE) %>%
+  ## select and rename column names appropriately
+  select("Age"              = "value",
+         "Female cases (n)" = "female n",
+         "Female %"         = "female proportion",
+         "Male cases (n)"   = "male n",
+         "Male %"           = "male proportion",
+         "Total") %>%
+  flextable() %>%
+  autofit
+
+```
+
+```{r describe respondents}
+
+# who is respondent
+study_data_cleaned %>%
+  group_by(caretaker) %>%
+  summarise(n= n()) %>%
+  arrange(desc(n)) %>%
+  mutate(prop = (n/sum(n))) %>%
+  mutate(prop = round(prop, 3)*100) %>%
+  flextable() %>%
+  autofit
+
+# median age of respondent
+median(study_data_cleaned$age_caretaker)
+
+
+```
+
+
+
+
+## Vaccination coverage
+
+Weighted vaccination coverage; accepting equal validity from self-reported and 
+card-reported vaccination status
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_overall \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while accpeting equal validity from self- and card-reporting. 
+
+Note that this includes a design effect. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r msf_vaccination_coverage}
+
+## coverage by card and verbal together
+
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(msf_vacc_status, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("MSF vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+#getting just number of children for each vaccination status value
+study_data_cleaned %>%
+tab_linelist(msf_vacc_status)
+
+
+## coverage by card and verbal separately
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(msf_vacc, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("MSF vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+
+```
+
+
+
+```{r routine_vaccination_coverage}
+
+
+# routine vaccination coverage: 
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+    tab_survey(routine_vacc_status, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("Routine vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+
+## coverage by card and verbal separately
+
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(routine_vacc, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("Routine vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+#getting just number of children for each vaccination status value
+study_data_cleaned %>%
+tab_linelist(routine_vacc_status)
+
+```
+
+
+
+```{r sia_vaccination_coverage}
+
+# SIA vaccination coverage: 
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(sia_vacc_status, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("SIA vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable() %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+## coverage by card and verbal separately
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(sia_vacc, deff = TRUE) %>%
+  select("SIA vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable() %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+  
+
+#getting just number of children for each vaccination status value
+study_data_cleaned %>%
+tab_linelist(sia_vacc_status)
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_overall_detail \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r overall coverage - all vacc oppotunities}
+
+# overall vaccination coverage: 
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(overall_vacc_status, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("Overall vaccination status" = value, 
+         "Children (n)" = n, 
+         "Vaccination coverage (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+#getting just number of children for each vaccination status value
+study_data_cleaned %>%
+tab_linelist(overall_vacc_status)
+
+```
+
+
+```{r overall coverage graph, warning = FALSE, echo = FALSE}
+
+all_coverage <- data.frame(vacc_campaign = c("MSF vaccination campaign",
+                                             "Routine vaccination (9 months)",
+                                             "Other vaccination opportunities",
+                                             "Overall vaccination coverage"), 
+                           coverage = c(95.8, 45.4, 48, 98.1), 
+                           lower_ci = c(93.0, 35.0, 38.3, 96.3),
+                           upper_ci = c(97.5, 56.1, 57.8, 99.1))
+
+all_coverage %>%
+  ggplot(aes(x = reorder(vacc_campaign, -coverage), y = coverage, fill = vacc_campaign)) +
+  geom_col() +
+  labs(x = "Measles vaccination opportunity",
+       y= "Measles vaccination coverage (%)") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position="none") + 
+  scale_fill_viridis_d(begin = 0.2, end = 0.6) +
+  geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.2) +
+  scale_x_discrete(labels = function(vacc_campaign) str_wrap(vacc_campaign, width = 10)) # wrapping axis text with long labels
+
+
+```
+
+
+
+## Reasons for not vaccinating - weighted tables and graphs
+
+Weighted counts and proportions for reasons not vaccinated in routine and 
+campaign circumstances, individually, among those not vaccinated
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// no_vacc_reason_routine_campaign_combo \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r No vaccination - MSF reasons, weighted & GRAPH}
+
+## msf reasons - with the variable msf_all_reasons - where "other" is now recoded
+msf_all_reasons <- survey_design %>% 
+  # filter for those not vaccinated 
+  filter(str_detect(msf_vacc_status, pattern = fixed("Yes"), negate = TRUE)) %>%
+  tab_survey(msf_all_reasons)  %>%
+  # rename columns appropriately if you want, pipe code above.
+  select("reasons_msf" = value, 
+         "Children (n)" = n, 
+         "Percent (95% CI)" = ci) %>%
+  mutate(prop = `Children (n)`/sum(`Children (n)`)*100) %>% # using this column for graphing later
+  mutate(prop = round(prop, 1))
+
+
+#just number of children who did not receive vaccination
+table(study_data_cleaned$msf_vacc_status)
+  
+
+##graph of the MSF reasons (including OTHER, recoded. column created in chunk 16);
+msf_all_reasons %>%
+    ggplot(aes(x = reorder(reasons_msf, -prop), y = prop, fill = reasons_msf)) +
+  geom_bar(stat ='identity') +
+  scale_fill_viridis_d(begin = 0.7, end = 0.3) + 
+  theme(legend.position="none", 
+        axis.text.x = element_text(size = 10)) + 
+  labs(y = "Percent (%)", 
+       x = "All reasons for non-vaccination: MSF") +
+  scale_x_discrete(labels = function (reasons_msf) str_wrap(reasons_msf, width = 9)) # wrapping axis text with long labels
+
+
+```
+
+
+```{r No vaccination - Routine reasons}
+
+#routine reasons
+routine_reason <- survey_design %>% 
+  ## filter for not vaccinated 
+  filter(str_detect(routine_vacc_status, pattern = fixed("Yes"), negate = TRUE)) %>%
+  tab_survey(route_reason_renamed) %>% 
+  ## rename remaining columns appropriately 
+  select("reason_routine" = value, 
+         "Children (n)" = n,
+         "Percent (95% CI)" = ci) %>%
+  mutate(prop = c(0.4,
+                  6.7, 
+                  7.4, 
+                  2.4, 
+                  82.6, 
+                  0.5)) #going to use this column for ggplot since I can't separate the CI column easily. 
+
+#print table
+routine_reason %>%
+  flextable() %>%
+  autofit()
+
+#going to need to group and recode many of these other reasons
+routine_reason_other <- survey_design %>%
+  filter(!is.na(reason_route_other)) %>%
+  group_by(reason_route_other) %>%
+  summarise(reason = n())
+
+#graph of routine reasons for non-vaccination
+routine_reason %>%
+  ggplot(aes(x = reorder(reason_routine, prop), y = prop, fill = reason_routine)) +
+  geom_bar(stat='identity') +
+  scale_fill_viridis_d(begin = 0.7, end = 0.3) + 
+  theme(legend.position="none", 
+        axis.text.y = element_text(size = 10)) + 
+  labs(y = "Percent (%)", 
+       x = "Reasons for non-vaccination: Routine") +
+  coord_flip() + # horizonal bar chart 
+  scale_x_discrete(labels = function (reason_routine) str_wrap(reason_routine, width = 10)) # wrapping axis text with long labels
+
+#just number of children who did not receive vaccination
+table(study_data_cleaned$routine_vacc_status)
+
+
+
+
+##graph of the routine reasons (including OTHER, recoded. column created in chunk 17); this is not weighted. 
+routine_all_reasons %>%
+  group_by(reason) %>%
+  summarise(n = n()) %>%
+  mutate(prop = n/sum(n)*100) %>%
+  mutate(prop = round(prop, 1)) %>%
+  ggplot(aes(x = reorder(reason, -prop), y = prop, fill = reason)) +
+  geom_bar(stat ='identity') +
+  scale_fill_viridis_d(begin = 0.7, end = 0.3) + 
+  theme(legend.position="none", 
+        axis.text.x = element_text(size = 6)) + 
+  labs(y = "Percent (%)", 
+       x = "All reasons for non-vaccination: routine") +
+  scale_x_discrete(labels = function (reason) str_wrap(reason, width = 7)) # wrapping axis text with long labels
+
+
+```
+
+
+
+
+```{r No vaccination - SIA reasons}
+
+##sia reasons
+sia_reason <- survey_design %>% 
+  ## filter for not vaccinated 
+  filter(str_detect(sia_vacc_status, pattern = fixed("Yes -"), negate = TRUE)) %>%
+  tab_survey(sia_reason_renamed) %>% 
+  ## rename remaining columns appropriately 
+  select("reason_sia" = value, 
+         "Children (n)" = n,
+         "Percent (95% CI)" = ci) %>%
+  mutate(prop = c(7.1,
+                  5.0, 
+                  4.9, 
+                  77.3, 
+                  5.6, 
+                  0.1)) #going to use this column for ggplot since I can't separate the CI column easily. 
+
+
+#print table
+sia_reason %>%
+  flextable() %>%
+  autofit()
+  
+#SIA other reasons: # need to find a way to group some of these with similar spellings/ reasons
+sia_reason_other <- survey_design %>%
+  filter(!is.na(reason_sia_other)) %>%
+  group_by(reason_sia_other) %>%
+  summarise(reason = n())
+
+#graph of SIA reasons for non-vaccination
+sia_reason %>%
+  ggplot(aes(x = reorder(reason_sia, prop), y = prop, fill = reason_sia)) +
+  geom_bar(stat='identity') +
+  scale_fill_viridis_d(begin = 0.7, end = 0.3) + 
+  theme(legend.position="none", 
+        axis.text.y = element_text(size = 10)) + 
+  labs(y = "Percent (%)", 
+       x = "Reasons for non-vaccination: SIA") +
+  coord_flip() + # horizonal bar chart 
+  scale_x_discrete(labels = function (reason_sia) str_wrap(reason_sia, width = 10)) # wrapping axis text with long labels
+
+#just number of children who did not receive SIA vaccination
+table(study_data_cleaned$sia_vacc_status)
+
+
+
+##graph of the SIA reasons (including OTHER, recoded. column created in chunk 18)
+sia_all_reasons %>%
+  group_by(reason) %>%
+  summarise(n = n()) %>%
+  mutate(prop = n/sum(n)*100) %>%
+  mutate(prop = round(prop, 1)) %>%
+  ggplot(aes(x = reorder(reason, -prop), y = prop, fill = reason)) +
+  geom_bar(stat ='identity') +
+  scale_fill_viridis_d(begin = 0.7, end = 0.3) + 
+  theme(legend.position="none", 
+        axis.text.x = element_text(size = 8)) + 
+  labs(y = "Percent (%)", 
+       x = "All reasons for non-vaccination: SIA") +
+  scale_x_discrete(labels = function (reason) str_wrap(reason, width = 8)) # wrapping axis text with long labels
+
+
+
+```
+
+
+
+## Previous measles illness 
+
+```{r previous measles,warning = FALSE, echo = FALSE}
+
+# need to convert ages to one tyoe of format (chose to make all ages in years)
+study_data_cleaned <- study_data_cleaned %>%
+  mutate(diagnosis_age_new = case_when(
+    age_diagnosis_months == 2 ~ 0.17,
+    age_diagnosis_months == 3 ~ 0.25,
+    age_diagnosis_months == 4 ~ 0.33,
+    age_diagnosis_months == 5 ~ 0.42,
+    age_diagnosis_months == 6 ~ 0.5,
+    age_diagnosis_months == 7 ~ 0.58, 
+    age_diagnosis_months == 8 ~ 0.67, 
+    age_diagnosis_months == 9 ~ 0.75, 
+    age_diagnosis_months == 10 ~ 0.83,
+    age_diagnosis_months == 11 ~ 0.92, 
+    age_diagnosis_years == 1 ~ 1, 
+    age_diagnosis_years == 2 ~ 2, 
+    age_diagnosis_years == 3 ~ 3, 
+    age_diagnosis_years == 4 ~ 4, 
+    age_diagnosis_years == 5 ~ 5, 
+    age_diagnosis_years == 6 ~ 6,
+    age_diagnosis_years == 7 ~ 7,
+    age_diagnosis_years == 8 ~ 8,
+    age_diagnosis_years == 9 ~ 9))
+
+# median age child got sick
+medage <- study_data_cleaned %>%
+  filter(!is.na(diagnosis_age_new)) %>%
+  select(diagnosis_age_new)
+
+median(medage$diagnosis_age_new)
+
+# number of children missing info on age they got sick
+fmt_count(study_data_cleaned, is.na(diagnosis_age_new))
+
+# previous disease history
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(diagnosis_disease, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("Previous measles diagnosis" = value, 
+         "Children (n)" = n, 
+         "Percent (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+#just number of children with previous diagnosis to fill in chart: 
+study_data_cleaned %>%
+  tab_linelist(diagnosis_disease)
+
+
+```
+
+
+
+Of the children who reported previously having measles, `r fmt_count(study_data_cleaned, is.na(diagnosis_age_new))` were missing information on the age the child became ill. 
+
+
+```{r measles immunity}
+
+
+#just count of children for table: 
+study_data_cleaned %>%
+  tab_linelist(immunity)
+
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(immunity, deff = TRUE) %>%
+  ## select and rename appropriate columns 
+  select("Immune status" = value, 
+         "Children (n)" = n, 
+         "Immunity (95% CI)" = ci,
+         "Design effect" = deff) %>%
+  flextable () %>%
+  colformat_num(col_keys = c("Design effect"), digits = 1) %>%
+  autofit
+
+
+
+```
+
+
+
+
+
+
+
+

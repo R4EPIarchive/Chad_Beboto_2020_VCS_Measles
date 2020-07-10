@@ -1,0 +1,1280 @@
+---
+title: "Beboto vaccination coverage survey"
+output: 
+  word_document:
+    keep_md: true
+---
+
+
+# Introduction to this template
+
+- For a more detailed explanation of this template, please visit https://r4epis.netlify.com/surveys  
+
+- Text within <! > will not show in your final document. These comments are used
+to explain the template. You can delete them if you want.
+
+## Installing and loading required packages 
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// setup \\\
+-------------------------------------------------------------------------------->
+  
+
+```{r setup, include = FALSE, results='hide', message=FALSE, warning=FALSE}
+## hide all code chunks in the output, but show errors
+knitr::opts_chunk$set(echo = FALSE, error = TRUE, fig.width = 6*1.25, fig.height = 6)
+
+
+## set default NA to - in output, define figure width/height
+options(knitr.kable.NA = "-")
+
+
+## Installing required packages for this template
+required_packages <- c("knitr",       # create output docs
+                       "here",        # find your files
+                       "rio",         # for importing data
+                       "epitrix",     # clean/shape data
+                       "dplyr",       # clean/shape data
+                       "tidyr",       # clean/shape data
+                       "forcats",     # manipulate and rearrange factors
+                       "stringr",     # manipulate texts
+                       "ggplot2",     # create plots and charts
+                       "sitrep",      # MSF field epi functions
+                       "survey",      # for survey functions
+                       "srvyr"        # dplyr wrapper for survey package
+                       )
+
+for (pkg in required_packages) {
+  ## install packages if not already present
+  if (!pkg %in% rownames(installed.packages())) {
+    install.packages(pkg)
+  }
+  
+  ## load packages to this current session 
+  library(pkg, character.only = TRUE)
+}
+
+
+## set default text size to 18 for plots
+## give classic black/white axes for plots
+ggplot2::theme_set(theme_classic(base_size = 18))
+
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+You should load your data as a linelist, where each row is one person. 
+
+Generally, survey datasets will have two levels:
+One for household and one for individual (to combine see merge_data_levels).
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_nonDHARMA_data \\\
+--------------------------------------------------------------------------------
+This section is for data not from Dharma. 
+If you have already loaded data from Dharma, go to merge_data_levels
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r read_nonDHIS_data, warning = FALSE, message = FALSE}
+
+## Excel file ------------------------------------------------------------------
+
+## read in household data sheet
+study_data_hh <- rio::import(here::here("7.analysis", "data", "vaccination_coverage_cleaned.xlsx"), 
+                             which = "hh level", na = ".")
+
+## read in individual level data sheet
+study_data_indiv <- rio::import(here::here("7.analysis", "data", "vaccination_coverage_cleaned.xlsx"), 
+                                which = "ind level", na = ".")
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// merge_data_levels \\\
+--------------------------------------------------------------------------------
+For survey datasets with two levels (e.g. household and individual), 
+these levels will need to be merged in to one dataset. 
+
+This is done using a unique identifier for the household 
+(which has to be repeated for each row in the individuals dataset) 
+For a Dharma dataset this variable is "fact_0_id".
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r merge_data_levels}
+
+## make sure each individual has the ID 
+## (equivalent of excel drag downwards to fill blanks)
+#study_data_indiv <- study_data_indiv %>% fill(merge_id)
+
+## join the individual and household data to form a complete data set
+study_data_raw <- left_join(study_data_hh, study_data_indiv, by = "merge_id")
+
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// prep_DHARMA_data \\\
+--------------------------------------------------------------------------------
+This section is to import your data dictionary and standardise variable names. 
+
+The Dharma data dictionary has variable names
+in the column_name column. Possible values for each variable are
+specified in choice_code and choice_name columns. 
+Code has the shortened value and Name has the full-text value.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r prep_data}
+
+## make a copy of your orginal dataset and name it study_data_cleaned
+study_data_cleaned <- study_data_raw
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// read_population_data \\\
+--------------------------------------------------------------------------------
+This template uses population data to create survey weights. 
+
+There are three options:
+- You can read in a spreadsheet with age group, sex and region data.
+- You can put in the specific populations into the gen_population function. 
+- If you have the total or regional populations, you can estimate the age group
+from proportions.
+
+Below we show basic examples for reading data and entering counts - as well as 
+a more complex version using proportions to get the age/sex breakdown in 
+two seperate regions. (Useful if doing a stratified survey)
+
+
+Age group proportions are from the OCBA population denominators tool v1. The
+proportions below are for sub-Saharan Africa in 2019. They are only an estimate!
+If you have more specific proportions, you can use them below.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r read_population_data, warning = FALSE, message = FALSE}
+
+
+## Read data -------------------------------------------------------------------
+
+## This step reads in your population data from Excel.
+## You may need to rename your columns.
+
+# population_data <- rio::import(here::here("population.xlsx"), which = "Sheet1")
+
+## repeat preparation steps as appropriate
+
+
+## Enter counts directly -------------------------------------------------------
+
+
+#Enter population counts by groups. 
+
+population_6m9y <- gen_population(
+  groups = c("6 months-9 years"), 
+  counts = c(24711), 
+  strata = NULL) %>%
+  rename (age_group = groups, 
+          population = n)
+
+
+## Create counts from proportions ----------------------------------------------
+## This step helps you estimate sub-group size with proportions.
+## You need to replace the total_pop and proportions. You can change the groups
+## to fit your needs. 
+
+## Here we repeat the steps for two regions (district A and B) then bind the two
+## together 
+
+
+## generate population data by age groups in years for district A
+#population_data_age_district_a <- gen_population(total_pop = 10000, # set total population 
+#  groups      = c("0", "1", "2", "3", "4", "5+"), # set groups
+#  proportions = c(0.0164, 0.0164, 0.015, 0.015,
+#                  0.015, 0.1386), # set proportions for each group
+#  strata      = c("Male", "Female")) %>%           # stratify by gender
+#  rename(age_group  = groups,                      # rename columns (NEW NAME = OLD NAME)
+#         sex        = strata,
+#         population = n) %>% 
+#  mutate(health_district = "District A")           # add a column to identify region 
+
+
+## generate population data by age groups in years for district B
+#population_data_age_district_b <- gen_population(total_pop = 10000, # set total population 
+#  groups      = c("0", "1", "2", "3", "4", "5+"), # set groups
+#  proportions = c(0.0164, 0.0164, 0.015, 0.015,
+#                  0.015, 0.1386), # set proportions for each group
+#  strata      = c("Male", "Female")) %>%           # stratify by gender
+#  rename(age_group  = groups,                      # rename columns (NEW NAME = OLD NAME)
+#         sex        = strata,
+#         population = n) %>% 
+#  mutate(health_district = "District B")           # add a column to identify region 
+
+
+
+## bind region population data together to get overall population 
+#population_data_age <- bind_rows(population_data_age_district_a, 
+#                                 population_data_age_district_b)
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// cluster_counts \\\
+--------------------------------------------------------------------------------
+For cluster surveys you may want to add survey weights at the cluster level. 
+
+This could be done as in the read_population_data chunk. 
+
+Alternatively if there are only a few counts, these could be entered as below
+in to a tibble. 
+
+In any case you will need to have one column with a cluster identifier which 
+matches your survey data, and another column with the number of households in 
+each cluster. 
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r cluster_counts}
+
+#read data in
+cluster_counts <- rio::import(here::here("7.analysis","data", "cluster counts.xlsx"))
+
+#round digits
+cluster_counts$total_hh <- round(cluster_counts$total_hh, digits = 0)
+
+#drop population column
+cluster_counts <- cluster_counts %>%
+    select(-pop)
+
+#might need to be a tibble for code later? the template had this created as a tibble but I imported instead. 
+as_tibble(cluster_counts)
+
+
+```
+
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// browse_data \\\
+--------------------------------------------------------------------------------
+
+You'll want to look at your data. Here are a few ways you can explore.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r browse_data, eval = FALSE}
+
+##Julia note: this is weird, it's returning ages that are less than (e.g. age of routine vaccination is 11 months and current age is 9 months. that's normal...)
+
+## check for logical date inconsistencies 
+## for example check vaccination age greater than current age and return corresponding IDs
+study_data_raw %>% 
+  filter(age_routine_vacc > age_months) %>% 
+  select(merge_id, age_routine_vacc,age_months)
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// standardise_dates \\\
+--------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+
+
+
+```{r standardise_dates}
+
+## use the guess_dates() function to make a first pass at date variables.
+study_data_cleaned <- study_data_cleaned %>%
+   mutate_at(vars(matches("date|Date")), linelist::guess_dates,
+             error_tolerance = 0.5)
+
+#checked class of "today" date variable - it's character. 
+class(study_data_cleaned$today)
+
+#change "today" date variable to a date:
+study_data_cleaned$today <- as.Date(study_data_cleaned$today, format = "%Y-%m-%d")
+
+#drop data from training and pilot day
+table(study_data_cleaned$today) # check which dates need to be dropped
+#drop dates older than April 1, 2020
+study_data_cleaned <- subset(study_data_cleaned, today >= "2020-04-01")
+
+
+```
+
+
+```{r cleaning}
+
+#checked in excel to find weirdness for variables, like we did each day during survey. Corrected hh number, cluster number, and team number for some. 
+
+#checking for weirdness here & corrected in excel if necessary
+#any houshold marked as both first AND second visit on the same line. 
+#table(study_data_cleaned$first_visit, study_data_cleaned$second_visit)
+#any empty hh that gave consent
+#table(study_data_cleaned$empty_household, study_data_cleaned$consent)
+
+#changed character variables that I'll be using to numeric: 
+study_data_cleaned$children_count <- as.numeric(study_data_cleaned$children_count)
+study_data_cleaned$cluster_number <- as.numeric(study_data_cleaned$cluster_number)
+study_data_cleaned$household_number <- as.numeric(study_data_cleaned$household_number)
+
+
+
+```
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// factor_vars \\\
+--------------------------------------------------------------------------------
+
+This chunk will help you clean factor variables.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r factor_vars}
+
+##JULIA - ignoring for now, will return if I really need true/false. for now variables are well named, and we'll see what the need is for true/false later. 
+
+## Change a yes/no variable in to TRUE/FALSE
+## create a new variable called consent 
+## where the old one is yes place TRUE in the new one
+#study_data_cleaned <- study_data_cleaned %>% 
+#  mutate(consent = q58_consent == "Yes")
+
+
+#JULIA ignored code below because had only one case of no consent. (found by: table(study_data_cleaned$no_consent_reason)
+
+## create a new variable by reordering the levels of a factor 
+#study_data_cleaned <- study_data_cleaned %>%
+#  mutate(no_consent = fct_relevel(q65_consent_no_reason,
+#                                  "Refuse to explain", 
+#                                  "No time", 
+#                                  "Bad experience",
+#                                  "Other reason")
+#        )
+
+
+## combine all vaccine variables in to one 
+## keep the yes answers and change others to no 
+## if missing in all three vars then stays NA
+
+##JULIA - I stopped doing this for now - wasn't sure it was needed yet. Code definitely needs adapting to this data - as is I created a variable that says 100% unvaccinated. Will come back to this if needed. 
+
+#study_data_cleaned <- study_data_cleaned %>% 
+#  mutate(vaccination_status = case_when(
+#    is.na(msf_vacc) & 
+#      is.na(routine_vacc) & 
+#      is.na(sia_vacc)  ~ NA_character_,
+#    msf_vacc    == "Yes - Vaccination card" ~ "Card", 
+#    routine_vacc == "Yes - Vaccination card" ~ "Card", 
+#    sia_vacc     == "Yes - Vaccination card" ~ "Card", 
+#    msf_vacc    == "Yes - Verbal"           ~ "Verbal", 
+#    routine_vacc == "Yes - Verbal"           ~ "Verbal", 
+#    sia_vacc     == "Yes - Verbal"           ~ "Verbal", 
+#    TRUE                                        ~ "Unvaccinated")
+#    )
+
+#checking the variable we created above. 
+#table(study_data_cleaned$msf_vacc)
+
+
+
+## correct the order of levels in newly created var
+#study_data_cleaned <- study_data_cleaned %>% 
+#  mutate(vaccination_status = fct_relevel(vaccination_status, 
+#                                          "Card", 
+#                                          "Verbal", 
+#                                          "Unvaccinated")
+#  )
+
+
+## create a new grouping for vaccine status variable 
+## simplified, card or verbal then yes otherwise no . 
+
+#JULIA same problem as above - needs work if i want to use this. 
+#study_data_cleaned <- study_data_cleaned %>% 
+#  mutate(
+#    vaccination_status_simple = case_when(
+#      is.na(vaccination_status)                   ~ NA_character_,
+#      vaccination_status %in% c("Card", "Verbal") ~ "Vaccinated", 
+#      TRUE                                        ~ "Unvaccinated")
+#    )
+
+
+## correct the order of levels in newly created var
+#study_data_cleaned <- study_data_cleaned %>% 
+#  mutate(vaccination_status_simple = fct_relevel(vaccination_status_simple, 
+#                                                 "Vaccinated", 
+#                                                 "Unvaccinated")
+#  )
+
+## explicitly replace NA of a factor
+#study_data_cleaned <- study_data_cleaned %>%
+#  mutate(vaccine_routine = fct_explicit_na(vaccine_routine, na_level = "No answer"))
+
+```
+
+
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// remove_unused_data \\\
+--------------------------------------------------------------------------------
+
+Your data might have empty rows or columns you want to remove.
+You can also use this section to create temporary datasets so you can review
+specific variables or rows.
+
+You may want to drop rows with missing IDs (i.e. blank rows from excel) 
+
+Those without consent need to be dropped too
+
+It is important that you drop observations before adding survey weights!
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r remove_unused_data}
+## Drop unused rows  -----------------------------------------------------------
+
+## store the cases that you drop so you can describe them (e.g. non-consenting)
+dropped <- study_data_cleaned %>% 
+  filter(consent == "no")
+
+## drop the unused rows from the survey data set  
+study_data_cleaned <- study_data_cleaned %>%
+  filter(consent == "yes")
+
+
+## Drop columns ----------------------------------------------------------------
+## OPTIONAL: This step shows you how you can remove certain variables.
+## study_data_cleaned <- select(study_data_cleaned, -c("age_years", "sex"))
+
+## OPTIONAL: if you want to inspect certain variables, you can select these by
+## name or column number. This example creates a reduced dataset for the first
+## three columns, age_years, and sex.
+
+# study_data_reduced <- select(study_data_cleaned, c(1:3, "age_years", "sex")
+```
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// survey_weights \\\
+--------------------------------------------------------------------------------
+
+Create survey weights according to your study design. 
+
+These require information on the source population and/or the clusters surveyed. 
+
+There are three options, comment out those you do not use: 
+- Stratified 
+- Cluster 
+- Stratified and cluster 
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r survey_weights}
+
+## stratified ------------------------------------------------------------------
+
+## create a variable called "surv_weight_strata" 
+## contains weights for each individual - by age group, sex and health district
+#study_data_cleaned <- add_weights_strata(x = study_data_cleaned, 
+#                                         p = population_data_age, 
+#                                         surv_weight = "surv_weight_strata",
+#                                         surv_weight_ID = "surv_weight_ID_strata",
+#                                         age_group, sex, health_district)
+
+
+## cluster ---------------------------------------------------------------------
+
+## merge village and household to create a unique household ID 
+study_data_cleaned <- study_data_cleaned %>% 
+  mutate(hh_id = str_glue("{village_name}_{household_number}"))
+
+
+## create cluster weights 
+#https://rdrr.io/github/R4EPI/sitrep/man/add_weights_cluster.html
+
+study_data_cleaned <- add_weights_cluster(x = study_data_cleaned, 
+                                          cl = cluster_counts, 
+                                          eligible = children_count, 
+                                          interviewed = children_count, 
+                                          cluster_x = village_name, 
+                                          cluster_cl = village_name, 
+                                          household_x = household_number, 
+                                          household_cl = total_hh, 
+                                          surv_weight = "surv_weight_cluster", 
+                                          surv_weight_ID = "surv_weight_ID_cluster", 
+                                          ignore_cluster = FALSE, 
+                                          ignore_household = FALSE)
+
+## stratified and cluster ------------------------------------------------------
+
+# ## create a survey weight for cluster and strata 
+# study_data_cleaned <- study_data_cleaned %>% 
+#   mutate(surv_weight_cluster_strata = surv_weight_strata * surv_weight_cluster)
+
+
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// survey_design \\\
+--------------------------------------------------------------------------------
+
+Create survey object according to your study design. 
+
+Used the same way as dataframes to calculate weight proportions etc. 
+
+Make sure that all necessary variables are created before this. 
+
+There are four options, comment out those you do not use: 
+- Simple random 
+- Stratified 
+- Cluster 
+- Stratified cluster
+
+For this template - we will pretend that we cluster surveys in two seperate 
+strata (health districts A and B). 
+So to get overall estimates we need have combined cluster and strata weights. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r survey_design}
+
+## simple random ---------------------------------------------------------------
+
+survey_design_simple <- study_data_cleaned %>% 
+  as_survey_design(ids = 1, # 1 for no cluster ids 
+                   weights = NULL, # No weight added
+                   strata = NULL # sampling was simple (no strata)
+                  )
+
+## stratified ------------------------------------------------------------------
+
+survey_design_strata <- study_data_cleaned %>% 
+  as_survey_design(ids = 1, # 1 for no cluster ids 
+                   weights = surv_weight_strata, # weight variable created above 
+                   strata = health_district # sampling was stratified by district
+                  )
+
+## cluster ---------------------------------------------------------------------
+
+survey_design_cluster <- study_data_cleaned %>% 
+  as_survey_design(ids = village, # 1 for no cluster ids 
+                   weights = surv_weight_cluster, # weight variable created above 
+                   strata = NULL # sampling was simple (no strata)
+                  )
+
+## stratified cluster ----------------------------------------------------------
+
+survey_design <- study_data_cleaned %>% 
+  as_survey_design(ids = village, # 1 for no cluster ids 
+                   weights = surv_weight_cluster_strata, # weight variable created above 
+                   strata = health_district # sampling was simple (no strata)
+                  )
+```
+
+
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// save_cleaned_data \\\
+--------------------------------------------------------------------------------
+
+You can save your cleaned dataset as an Excel. 
+This automatically names your file "study_data_cleaned_DATE", where DATE is the
+current date.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r save_cleaned_data}
+# rio::export(study_data_cleaned, str_glue("study_data_cleaned_{Sys.Date()}.xlsx"))
+```
+
+
+
+# Results
+
+## Survey inclusion 
+
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// inclusion_counts \\\
+--------------------------------------------------------------------------------
+
+The below chunks calculate values that are displayed with the inline text
+
+Get the counts of clusters and households included 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r inclusion_counts}
+
+## get counts of number of clusters 
+num_clus <- study_data_cleaned %>%
+  ## trim data to unique clusters
+  distinct(cluster_number) %>% 
+  ## get number of rows (count how many unique)
+  nrow()
+
+## get counts of number households 
+num_hh <- study_data_cleaned %>% 
+  ## get unique houses by cluster
+  distinct(cluster_number, q14_hh_no) %>% 
+  ## get number of rounds (count how many unique)
+  nrow()
+
+```
+
+
+We included `r num_hh` households accross `r num_clus` clusters in this survey analysis. 
+
+
+Among the `r nrow(dropped)` individuals without consent to participate in the survey, 
+the reasons for refusal are described below. 
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// consent_reasons \\\
+--------------------------------------------------------------------------------
+
+This chunk will create a table of dropped individuals by reason for no consent. 
+
+Note that these reasons are spread over multiple columns, thus the proportion
+needs to be of the total and missings need to be dropped. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r consent_reasons}
+
+## using the dataset with dropped individuals 
+tab_linelist(dropped, "q65_consent_no_reason", col_total = TRUE, digits = 1) %>% 
+  ## drop variable column and rename others
+  select("Reason" = value, 
+         "n" = n, 
+         "%" = proportion) %>%
+  kable(digits = 1)
+```
+
+
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// cluster_hh_size \\\
+--------------------------------------------------------------------------------
+
+The below chunks calculate values that are displayed with the inline text
+
+Get counts of households per cluster and individuals per household. 
+From these create medians and standard deviations. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r cluster_hh_size}
+
+## get counts of the number of households per cluster
+clustersize <- study_data_cleaned %>% 
+  ## trim data to only unique households within each cluster
+  distinct(cluster_number, q14_hh_no) %>%
+  ## count the number of households within each cluster
+  count(cluster_number) %>% 
+  pull(n)
+
+## get the median number of households per cluster
+clustermed <- median(clustersize)
+
+## get the min and max number of households per cluster
+## paste these together seperated by a dash 
+clusterrange <- str_c(range(clustersize), collapse = "--")
+
+## get counts of children per household 
+## do this by cluster as household IDs are only unique within clusters
+hhsize <- study_data_cleaned %>% 
+  count(cluster_number, q14_hh_no) %>%
+  pull(n) 
+
+## get median number of children per household
+hhmed <- median(hhsize)
+## get the min and max number of children per household
+## paste these together seperated by a dash 
+hhrange <- str_c(range(hhsize), collapse = "--")
+
+# get standard deviation 
+hhsd <- round(sd(hhsize), digits = 1)
+```
+
+
+The median number of households per cluster was
+`r clustermed`, with a range of `r clusterrange`. The median number of children
+per household was `r hhmed` (range: `r hhrange`, standard deviation: `r hhsd`). 
+
+
+## Demographic information
+
+
+In total we included `r nrow(study_data_cleaned)` in the survey analysis. 
+The age break down and a comparison with the source population is shown below. 
+
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// descriptive_sampling_bias \\\
+--------------------------------------------------------------------------------
+
+Compare the proportions in each age group between your sample and 
+the source population. 
+
+This is important to be able to highlight potential sampling bias. 
+You could similarly repeat this looking at distributions by sex. 
+
+Note that these p-values are just indicative, and a descriptive discussion (or
+visualisation with age-pyramids below) of the distributions in your study sample 
+compared to the source population is more
+important that the binomial test itself. This is because increasing sample size
+will more often than not lead to differences that may be irrelevant after weighting
+your data. 
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r descriptive_sampling_bias, warning = FALSE}
+## counts and props of the study population
+ag <- tab_linelist(study_data_cleaned, "age_group") %>%
+  mutate(n_total = sum(n)) %>%
+  select(-variable) %>%
+  rename(age_group = value) %>%
+  mutate(age_group = fct_inorder(age_group))
+
+## counts and props of the source population
+propcount <- group_by(population_data_age, age_group) %>%
+    tally(population) %>%
+    mutate(proportion = n / sum(n))
+
+## bind together the columns of two tables, group by age, and perform a 
+## binomial test to see if n/total is significantly different from population
+## proportion.
+  ## suffix here adds to text to the end of columns in each of the two datasets
+left_join(ag, propcount, by = "age_group", suffix = c("", "_pop")) %>%
+  group_by(age_group) %>%
+
+  ## broom::tidy(binom.test()) makes a data frame out of the binomial test and
+  ## will add the variables p.value, parameter, conf.low, conf.high, method, and
+  ## alternative. We will only use p.value here. You can include other
+  ## columns if you want to report confidence intervals
+  mutate(binom = list(broom::tidy(binom.test(n, n_total, proportion_pop)))) %>%
+  unnest(cols = c(binom)) %>% # important for expanding the binom.test data frame
+  mutate(proportion_pop = proportion_pop * 100) %>%
+
+  ## Adjusting the p-values to correct for false positives 
+  ## (because testing multiple age groups). This will only make 
+  ## a difference if you have many age categories
+  mutate(p.value = p.adjust(p.value, method = "holm")) %>%
+  select(age_group, n, proportion, n_pop, proportion_pop, p.value) %>%
+                      
+  ## Only show p-values over 0.001 (those under report as <0.001)
+  mutate(p.value = ifelse(p.value < 0.001, "<0.001", as.character(round(p.value, 3)))) %>%
+
+  ## rename the columns appropriatley
+  rename(
+    "Age group" = age_group,
+    "Study population (n)" = n,
+    "%" = proportion,
+    "Source population (n)" = n_pop,
+    "%" = proportion_pop,
+    "P-value" = p.value
+  ) %>%
+  kable(digits = 1)
+
+```
+
+
+
+<!--~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// median_age_sex_ratios \\\
+--------------------------------------------------------------------------------
+
+The below chunk calculate values that are displayed inline
+
+This returns the median age and sex ratios overall as well as by age group. 
+It also pulls the age group with the highest sex ratio. 
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~-->
+
+```{r median_age_sex_ratios}
+## compute the median age 
+medage <- median(study_data_cleaned$age_in_years)
+## paste the lower and uper quartile together
+iqr <- str_c(  # basically copy paste togehter the following
+  ## calculate the 25% and 75% of distribution, with missings removed
+  quantile(     
+    study_data_cleaned$age_in_years, 
+    c(0.25, 0.75), 
+    na.rm = TRUE), 
+  ## between lower and upper place an en-dash
+  collapse = "--")
+
+
+## compute overall sex ratio 
+sex_ratio <- study_data_cleaned %>% 
+  count(sex) %>% 
+  pivot_wider(names_from = sex, values_from = n) %>% 
+  mutate(ratio = round(Male/Female, digits = 3)) %>%
+  pull(ratio)
+
+## compute sex ratios by age group 
+sex_ratio_age <- study_data_cleaned %>% 
+  count(age_group, sex) %>% 
+  pivot_wider(names_from = sex, values_from = n) %>% 
+  mutate(ratio = round(Male/Female, digits = 3)) %>%
+  select(age_group, ratio)
+
+## sort table by ascending ratio then select the lowest (first)
+min_sex_ratio_age <- arrange(sex_ratio_age, ratio) %>% slice(1)
+```
+
+Among the `r nrow(study_data_cleaned)` surveyed individuals, there were 
+`r fmt_count(study_data_cleaned, sex == "Female")` females and 
+`r fmt_count(study_data_cleaned, sex == "Male")` males (unweighted). The male to
+female ratio was `r sex_ratio` in the surveyed population. The lowest male to
+female ratio was `r min_sex_ratio_age$ratio`
+in the `r min_sex_ratio_age$age_group` year age group.
+The median age of surveyed individuals was `r medage` years (Q1-Q3 of `r iqr`
+years). Children under five years of age made up 
+`r fmt_count(study_data_cleaned, age_in_years < 5)`of the surveyed individuals.
+The highest number of surveyed indivduals (unweighted) were in the 
+`r table(study_data_cleaned$age_group) %>% which.max() %>% names()`
+year age group.
+
+Unweighted age distribution of population by year age group and gender.
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// describe_by_age_group_and_sex \\\
+--------------------------------------------------------------------------------
+
+This chunk will create an unweighted table of survey individuals by age group 
+and sex.
+
+Note that proportions are of the total sample (not within each gender) 
+to change this, set proptotal = FALSE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r describe_by_age_group_and_sex}
+
+tab_linelist(study_data_cleaned, age_group, 
+             strata     = sex, 
+             row_total  = TRUE,
+             col_total  = TRUE,
+             prop_total = TRUE) %>%
+  ## select and rename column names appropriately
+  select("Age"              = "value",
+         "Female cases (n)" = "Female n",
+         "%"                = "Female proportion",
+         "Male cases (n)"   = "Male n",
+         "%"                = "Male proportion",
+         "Total") %>%
+  kable(digits = 1)
+```
+
+
+
+Unweighted age distribution of population by age category (month and year) and gender.
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// describe_by_age_category_and_sex \\\
+--------------------------------------------------------------------------------
+
+This chunk will create an unweighted table of survey individuals by age category 
+and sex (i.e. a breakdown by months and years combined).
+
+Note that proportions are of the total sample (not within each gender) 
+to change this, set proptotal = FALSE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r describe_by_age_category_and_sex}
+
+tab_linelist(study_data_cleaned, age_category, 
+             strata     = sex, 
+             row_total  = TRUE,
+             col_total  = TRUE,
+             prop_total = TRUE) %>%
+  ## select and rename column names appropriately
+  select("Age"              = "value",
+         "Female cases (n)" = "Female n",
+         "%"                = "Female proportion",
+         "Male cases (n)"   = "Male n",
+         "%"                = "Male proportion",
+         "Total") %>%
+  kable(digits = 1)
+```
+
+
+There were `r fmt_count(study_data_cleaned, is.na(sex))` cases missing information on sex and 
+`r fmt_count(study_data_cleaned, is.na(age_group))` missing age group.
+
+Unweighted age and gender distribution of household population covered by the survey.
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// age_pyramid \\\
+--------------------------------------------------------------------------------
+
+This chunk creates an unweighted (using study_data_cleaned) age/sex pyramid
+of your cases.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r age_pyramid, warning=FALSE}
+
+plot_age_pyramid(study_data_cleaned, 
+                 age_group = "age_group", 
+                 split_by = "sex",
+                 proportion = TRUE) + 
+  labs(y = "Proportion", x = "Age group (years)") + # change axis labels
+  theme(legend.position = "bottom",     # move legend to bottom
+        legend.title = element_blank(), # remove title
+        text = element_text(size = 18)  # change text size
+       )
+```
+
+
+Unweighted age and gender distribution, stratified by health district,
+of household population covered by the survey.
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// age_pyramid_strata \\\
+--------------------------------------------------------------------------------
+
+This chunk creates an unweighted (using study_data_cleaned) age/sex pyramid
+of your cases, stratified by health district. 
+
+If you have a stratified survey design this may be useful for visualising 
+if you have an excess of representation in 
+either sex or gender in any of your survey strata. 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r age_pyramid_strata, warning=FALSE}
+
+plot_age_pyramid(study_data_cleaned, 
+                 age_group = "age_group", 
+                 split_by = "sex",
+                 stack_by = "health_district",
+                 proportion = TRUE) + 
+  labs(y = "Proportion", x = "Age group (years)") +                 # change axis labels
+  theme(legend.position = "bottom",     # move legend to bottom
+        legend.title = element_blank(), # remove title
+        text = element_text(size = 18)  # change text size
+       )
+```
+
+
+Weighted age and gender distribution of household population covered by the survey.  
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// age_pyramid_survey \\\
+--------------------------------------------------------------------------------
+
+This chunk creates a weighted (using survey_design) age/sex pyramid
+of your cases.
+
+Note - if this is substantially different to your unweighted 
+pyramid, then it may suggest some sampling bias (similarly to the table comparing 
+sample and source population distributions by binomial test). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r age_pyramid_survey, warning=FALSE}
+
+plot_age_pyramid(survey_design,
+                 age_group = "age_group",
+                 split_by = "sex", 
+                 proportion = TRUE) +
+  labs(y = "Proportion", x = "Age group (years)") +                 # change axis labels
+  theme(legend.position = "bottom",     # move legend to bottom
+        legend.title = element_blank(), # remove title
+        text = element_text(size = 18)  # change text size
+       )
+```
+
+
+
+## Vaccination coverage
+
+Weighted vaccination coverage; accepting equal validity from self-reported and 
+card-reported vaccination status
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_overall \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while accpeting equal validity from self- and card-reporting. 
+
+Note that this includes a design effect. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_overall}
+
+survey_design %>%  # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(vaccination_status_simple, deff = TRUE) %>% 
+  ## select and rename appropriate columns 
+  select("Vaccination status" = value, 
+         "Children (n)" = n, 
+         "% (95% CI)" = ci,
+         "Design effect" = deff) %>% 
+  kable(digits = 1)
+```
+
+
+Weighted vaccination coverage; distinguishing between vaccination cards and 
+verbal confirmation 
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_overall_detail \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while distinguishing validity from self- and card-reporting. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_overall_detail}
+
+survey_design %>% # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions
+  tab_survey(vaccination_status) %>% 
+  select("Vaccination status" = value, 
+         "Children (n)" = n,  
+         "% (95% CI)" = ci) %>% 
+  kable(digits = 1)
+```
+
+
+
+Weighted vaccination coverage by health district; accepting equal validity from
+self-reported and card-reported vaccination status 
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_strata \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while accpeting equal validity from self- and card-reporting, 
+stratified by health district. 
+
+Note that this includes a design effect. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_strata}
+
+survey_design %>%  # use the survey object (weighted)
+  tab_survey(vaccination_status_simple, strata = health_district) %>% 
+  select(-variable) %>%
+  rename("Vaccination status" = value) %>% 
+  augment_redundant(" (n)"         = " n") %>%  # wrap all "n" in braces (note space before n)
+  rename_redundant("% (95% CI)"    = " ci") %>% # relabel all columns containing "ci"
+  kable(digits = 1)
+```
+
+
+
+
+
+Weighted vaccination coverage by sex; accepting equal validity from self-reported 
+and card-reported vaccination status
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_sex \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while accpeting equal validity from self- and card-reporting; broken 
+down by sex. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_sex}
+
+survey_design %>% # use the survey object (weighted)
+  ## calculate weighted counts and weighted proportions - stratified by sex
+  tab_survey(vaccination_status_simple, strata = sex, deff = TRUE) %>%
+  select(-variable) %>%
+  rename("Vaccination status" = value) %>% 
+  augment_redundant(" (n)"         = " n") %>%  # wrap all "n" in braces (note space before n)
+  rename_redundant("% (95% CI)"    = " ci",      # relabel all columns containing "ci"
+                   "Design Effect" = " deff") %>% # "deff" to "Design effect"
+  kable(digits = 1)
+```
+
+
+
+Weighted vaccination coverage by sex; distinguishing between vaccination cards 
+and verbal confirmation
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_sex_detail \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while distinguishing validity from self- and card-reporting; broken 
+down by sex. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_sex_detail}
+# return weighted counts and weighted proportions 
+survey_design %>% 
+  tab_survey(vaccination_status, strata = sex) %>%
+  select(-variable) %>%
+  rename("Vaccination status" = value) %>% 
+  augment_redundant(" (n)"         = " n") %>%  # wrap all "n" in braces (note space before n)
+  rename_redundant("% (95% CI)"    = " ci"      # relabel all columns containing "ci"
+                   ) %>% 
+  kable(digits = 1)
+```
+
+
+
+Weighted vaccination coverage by age group; accepting equal validity from self-reported and card-reported vaccination status
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_age_group \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while accpeting equal validity from self- and card-reporting; broken 
+down by age group.  
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_age_group}
+ 
+survey_design %>% 
+  tab_survey(vaccination_status_simple, strata = age_group, deff = TRUE, 
+             digits = 1, drop = "Missing", transpose = "value") %>%
+  rename("Age group (years)" = age_group) %>% 
+  augment_redundant(" (n)"         = " n") %>%  # wrap all "n" in braces (note space before n)
+  rename_redundant("% (95% CI)"    = " ci",       # relabel all columns containing "ci"
+                   "Design Effect" = " deff") %>% # "deff" to "Design effect"
+  kable(digits = 1)
+```
+
+
+
+Weighted vaccination coverage by age group; distinguishing between vaccination 
+cards and verbal confirmation 
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// vaccination_coverage_sex_detail \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for vaccination 
+coverage while distinguishing validity from self- and card-reporting; broken 
+down by age group.  
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r vaccination_coverage_age_group_detail}
+ 
+survey_design %>% 
+  tab_survey(vaccination_status, strata = age_group, 
+             drop = "Missing", transpose = "value") %>%
+  rename("Age group (years)" = age_group) %>% 
+  augment_redundant(" (n)"         = " n") %>%  # wrap all "n" in braces (note space before n)
+  rename_redundant("% (95% CI)"    = " ci"      # relabel all columns containing "ci"
+                   ) %>%
+  kable(digits = 1)
+```
+
+
+## Reasons for not vaccinating 
+
+Weighted counts and proportions for reasons not vaccinated in routine and 
+campaign circumstances, individually, among those not vaccinated
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// no_vacc_reason_routine_campaign_combo \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for reasons 
+not vaccinated broken down by routine and campaign.  
+
+This happens in three steps: 
+- Counts and weighted proportions for routine
+- Counts and weighted proportions for campaign 
+- bind the columns together 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+
+```{r no_vacc_reason_routine_campaign_combo}
+
+## routine reasons 
+routine <- survey_design %>% 
+  ## filter for those not vaccinated 
+  filter(str_detect(vaccine_routine, pattern = fixed("Yes -"), negate = TRUE)) %>%
+  tab_survey(q7_no_routine_vacc_r) %>%
+  # rename columns appropriately
+  select("Reasons" = value, 
+         "Routine (n)" = n , 
+         "% (95% CI)" = ci)
+
+## campaign reasons 
+campaign <- survey_design %>% 
+  ## filter for not vaccinated 
+  filter(str_detect(vaccine_mass, pattern = fixed("Yes -"), negate = TRUE)) %>%
+  tab_survey(q28_no_campaign_vacc_r) %>% 
+  ## rename remaining columns appropriately 
+  select("Campaign (n)" = n, 
+         "% (95% CI)" = ci)
+  
+## bind two together 
+bind_cols(routine, 
+          campaign) %>% 
+  kable(digits = 1)
+
+```
+
+
+Weighted counts and proportions for reasons not vaccinated in supplemented 
+immunisation activities, among those not vaccinated
+
+<!-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/// no_vacc_reason_sia \\\
+--------------------------------------------------------------------------------
+
+The below chunk creates a weighted table of counts proportions for reasons 
+not vaccinated during supplemented immunisation activitites. 
+
+Note that low counts or short observation times may lead to a confidence interval 
+that crosses zero (i.e. negative) for mortality ratios. These should be interpreted
+as if no deaths or recoded to zero (impossible to have negative deaths). 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ -->
+```{r no_vacc_reason_sia}
+
+survey_design %>% 
+  filter(str_detect(vaccine_sia, pattern = fixed("Yes -"), negate = TRUE)) %>%
+  tab_survey(q38_no_sia_vacc_reason) %>%
+  ## rename columns appropriately
+  select("Reasons" = value, 
+         "Routine (n)" = n , 
+         "% (95% CI)" = ci) %>%
+  kable(digits = 1)
+```
+
